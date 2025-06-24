@@ -31,7 +31,6 @@ class DecBlock(nn.Module):
         acts = activations[self.res]
         x = xs.get(self.res, torch.zeros_like(acts))
 
-        # 🔥 interpolate acts if shape mismatch
         if acts.shape[2:] != x.shape[2:]:
             acts = F.interpolate(acts, size=x.shape[2:], mode='nearest')
 
