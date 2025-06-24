@@ -4,7 +4,7 @@ We reproduce and extend Very Deep Variational Autoencoder. Under image is reprod
 <p align="center">
   <img src="https://github.com/geonhoted/VDVAE_AML/blob/main/result_of_baseline_epoch300.png?raw=true" alt="VDVAE epoch300 result" />
 </p>  
-Here is our reference. ([Very Deep VAEs Generalize Autoregressive Models and Can Outperform Them on Images](https://arxiv.org/abs/2011.10650))
+Here is our reference. "Very Deep VAEs Generalize Autoregressive Models and Can Outperform Them on Images" (https://arxiv.org/abs/2011.10650)  
 
 **Our model variants:**
 - Baseline: Vanilla VDVAE reimplemented based on paper
