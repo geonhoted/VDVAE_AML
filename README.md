@@ -81,8 +81,8 @@ This version adds self-attention to the encoder blocks to enhance the model's re
 
 3. Check the output:
 
-Reconstructed images and sampled images will be shown in the notebook after each epoch.
+    Reconstructed images and sampled images will be shown in the notebook after each epoch.
 
-Inspect the training log (log.txt) to monitor stability and performance.
+    Inspect the training log (log.txt) to monitor stability and performance.
 
 4. You may compare attention-added results with the baseline to analyze improvements in sample quality or log-likelihood. 
