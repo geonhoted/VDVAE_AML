@@ -4,29 +4,30 @@ from decBlock import DecBlock
 from utils import DmolNet 
 import itertools
 
-
 class Decoder(nn.Module):
-    def __init__(self, res_list, width_map, zdim, bottleneck_multiple,
-                 output_res, n_blocks, num_mixtures, low_bit=False):
+    def __init__(self, width_map, zdim, bottleneck_multiple,
+                 output_res, block_str, num_mixtures, low_bit=False):
         super().__init__()
         self.output_res = output_res
         self.width_map = width_map
+        blocks = parse_layer_string(block_str)
+        n_blocks = len(blocks)
 
         self.blocks = nn.ModuleList([
             DecBlock(
                 res=res,
+                mixin=mixin,
                 width=width_map[res],
                 zdim=zdim,
                 bottleneck_multiple=bottleneck_multiple,
-                mixin_res=mixin,
                 n_blocks=n_blocks
             )
-            for res, mixin in res_list
+            for res, mixin in blocks
         ])
 
         self.bias_xs = nn.ParameterDict({
             str(res): nn.Parameter(torch.zeros(1, width_map[res], res, res))
-            for res, _ in res_list
+            for res, _ in blocks
         })
 
         out_width = width_map[output_res]
