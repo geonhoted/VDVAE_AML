@@ -1,7 +1,7 @@
 # AML Team Project: Very Deep VAE
 
-We reproduce and extend Very Deep Variational Autoencoder. Under image is reproduced reference paper's result with 75-layer hierarchical architecture trained in epoch 300 on CIFAR-10 dataset.
-![](https://github.com/geonhoted/VDVAE_AML/blob/main/result_of_baseline_epoch300.png?raw=true)
+We reproduce and extend Very Deep Variational Autoencoder. Under image is reproduced reference paper's result with 75-layer hierarchical architecture trained in epoch 300 on CIFAR-10 dataset.  
+![](https://github.com/geonhoted/VDVAE_AML/blob/main/result_of_baseline_epoch300.png?raw=true)  
 Here is our reference. ([Very Deep VAEs Generalize Autoregressive Models and Can Outperform Them on Images](https://arxiv.org/abs/2011.10650))
 
 **Our model variants:**
