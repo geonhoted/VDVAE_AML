@@ -1,9 +1,19 @@
-import torch
-from collections import defaultdict
+from mpi4py import MPI
 import os
-import numpy as np
+import json
+import socket
+import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.nn.parallel.distributed import DistributedDataParallel
+from torch.optim import AdamW
+from collections import defaultdict
+import argparse
+import time
+import numpy as np
+import subprocess
+
 
 def parse_layer_string(s):
     layers = []
@@ -51,6 +61,7 @@ def draw_gaussian_diag_samples(mu, logsigma):
     eps = torch.empty_like(mu).normal_(0., 1.)
     return torch.exp(logsigma) * eps + mu
 
+
 def discretized_mix_logistic_loss(x, l, low_bit=False):
     """ log-likelihood for mixture of discretized logistics, assumes the data has been rescaled to [-1,1] interval """
     # Adapted from https://github.com/openai/pixel-cnn/blob/master/pixel_cnn_pp/nn.py
@@ -91,7 +102,6 @@ def discretized_mix_logistic_loss(x, l, low_bit=False):
     # robust version, that still works if probabilities are below 1e-5 (which never happens in our code)
     # tensorflow backpropagates through tf.select() by multiplying with zero instead of selecting: this requires use to use some ugly tricks to avoid potential NaNs
     # the 1e-12 in tf.maximum(cdf_delta, 1e-12) is never actually used as output, it's purely there to get around the tf.select() gradient issue
-    # if the probability on a sub-pixel is below 1e-5, we use an approximation based on the assumption that the log-density is constant in the bin of the observed sub-pixel value
     if low_bit:
         log_probs = torch.where(x < -0.999,
                                 log_cdf_plus,
@@ -112,6 +122,7 @@ def discretized_mix_logistic_loss(x, l, low_bit=False):
     mixture_probs = torch.logsumexp(log_probs, -1)
     return -1. * mixture_probs.sum(dim=[1, 2]) / np.prod(xs[1:])
 
+
 def const_max(t, constant):
     other = torch.ones_like(t) * constant
     return torch.max(t, other)
@@ -120,7 +131,8 @@ def const_max(t, constant):
 def const_min(t, constant):
     other = torch.ones_like(t) * constant
     return torch.min(t, other)
-    
+
+
 def sample_from_discretized_mix_logistic(l, nr_mix):
     ls = [s for s in l.shape]
     xs = ls[:-1] + [3]
@@ -145,6 +157,7 @@ def sample_from_discretized_mix_logistic(l, nr_mix):
     x2 = const_min(const_max(x[:, :, :, 2] + coeffs[:, :, :, 1] * x0 + coeffs[:, :, :, 2] * x1, -1.), 1.)
     return torch.cat([torch.reshape(x0, xs[:-1] + [1]), torch.reshape(x1, xs[:-1] + [1]), torch.reshape(x2, xs[:-1] + [1])], dim=3)
 
+
 class DmolNet(nn.Module):
     def __init__(self, width, num_mixtures, low_bit=False):
         super().__init__()
@@ -157,6 +170,9 @@ class DmolNet(nn.Module):
         return discretized_mix_logistic_loss(x=x, l=self.forward(px_z), low_bit=self.low_bit)
 
     def forward(self, px_z):
+        if not isinstance(px_z, torch.Tensor):
+            if isinstance(px_z, np.ndarray):
+                px_z = torch.from_numpy(px_z).to(device=self.out_conv.weight.device, dtype=self.out_conv.weight.dtype).contiguous()
         xhat = self.out_conv(px_z)
         return xhat.permute(0, 2, 3, 1)
 
@@ -167,11 +183,206 @@ class DmolNet(nn.Module):
         xhat = np.minimum(np.maximum(0.0, xhat), 255.0).astype(np.uint8)
         return xhat
 
+
 def log_prob_from_logits(x):
     """ numerically stable log_softmax implementation that prevents overflow """
     axis = len(x.shape) - 1
     m = x.max(dim=axis, keepdim=True)[0]
     return x - m - torch.log(torch.exp(x - m).sum(dim=axis, keepdim=True))
-    
+
+
+def mpi_size():
+    return MPI.COMM_WORLD.Get_size()
+
+
+def mpi_rank():
+    return MPI.COMM_WORLD.Get_rank()
+
+
+def compute_mpi_topology():
+    world_size = mpi_size()
+    global_rank = mpi_rank()
+    # compute num_nodes
+    if world_size % 8 == 0:
+        num_nodes = world_size // 8
+    else:
+        num_nodes = world_size // 8 + 1
+    # compute gpus_per_nodes
+    if world_size > 1:
+        gpus_per_node = max(world_size // num_nodes, 1)
+    else:
+        gpus_per_node = 1
+    # local rank
+    local_rank = global_rank % gpus_per_node
+
+    return world_size, local_rank, global_rank
+
+
+def setup_mpi(H):
+    H.mpi_size, H.local_rank, H.rank = compute_mpi_topology()
+    os.environ["RANK"] = str(H.rank)
+    os.environ["WORLD_SIZE"] = str(H.mpi_size)
+    os.environ["MASTER_PORT"] = str(H.port)
+    # os.environ["NCCL_LL_THRESHOLD"] = "0"
+    os.environ["MASTER_ADDR"] = MPI.COMM_WORLD.bcast(socket.gethostname(), root=0)
+    # 처음 한 번만 초기화
+    if not dist.is_initialized():
+      torch.cuda.set_device(H.local_rank)
+      dist.init_process_group(backend='nccl', init_method="env://")   # remove f''
+
+
 def mkdir_p(path):
     os.makedirs(path, exist_ok=True)
+
+
+def setup_save_dirs(H):
+    H.save_dir = os.path.join(H.save_dir, H.desc)
+    mkdir_p(H.save_dir)
+    H.logdir = os.path.join(H.save_dir, 'log')
+
+
+def logger(log_prefix):
+    'Prints the arguments out to stdout, .txt, and .jsonl files'
+    jsonl_path = f'{log_prefix}.jsonl'
+    txt_path = f'{log_prefix}.txt'
+
+    def log(*args, pprint=False, **kwargs):
+        if mpi_rank() != 0:
+            return
+        t = time.ctime()
+        argdict = {'time': t}
+        if len(args) > 0:
+            argdict['message'] = ' '.join([str(x) for x in args])
+        argdict.update(kwargs)
+
+        txt_str = []
+        args_iter = sorted(argdict) if pprint else argdict
+        for k in args_iter:
+            val = argdict[k]
+            if isinstance(val, np.ndarray):
+                val = val.tolist()
+            elif isinstance(val, np.integer):
+                val = int(val)
+            elif isinstance(val, np.floating):
+                val = float(val)
+            argdict[k] = val
+            if isinstance(val, float):
+                val = f'{val:.5f}'
+            txt_str.append(f'{k}: {val}')
+        txt_str = ', '.join(txt_str)
+
+        if pprint:
+            json_str = json.dumps(argdict, sort_keys=True)
+            txt_str = json.dumps(argdict, sort_keys=True, indent=4)
+        else:
+            json_str = json.dumps(argdict)
+        print(txt_str, flush=True)
+
+        with open(txt_path, "a+") as f:
+            print(txt_str, file=f, flush=True)
+        with open(jsonl_path, "a+") as f:
+            print(json_str, file=f, flush=True)
+    return log
+
+
+def set_up_hyperparams(s=None):
+    H = Hyperparams()
+    parser = argparse.ArgumentParser()
+    parser = add_vae_arguments(parser)
+    parse_args_and_update_hparams(H, parser, s=s)
+    setup_mpi(H)
+    setup_save_dirs(H)
+    logprint = logger(H.logdir)
+    for i, k in enumerate(sorted(H)):
+        logprint(type='hparam', key=k, value=H[k])
+    np.random.seed(H.seed)
+    torch.manual_seed(H.seed)
+    torch.cuda.manual_seed(H.seed)
+    logprint('traning model', H.desc, 'on', H.dataset)
+    return H, logprint
+
+
+def linear_warmup(warmup_iters):
+    def f(iteration):
+        return iteration / warmup_iters if iteration < warmup_iters else 1.0
+    return f
+
+
+def load_vaes(encoder, decoder, image_size, logprint):
+    mpi_size, local_rank, rank = compute_mpi_topology()
+    torch.cuda.set_device(local_rank)
+
+    vae = VAE(encoder, decoder, image_size).cuda(local_rank)
+    ema_vae = VAE(encoder, decoder, image_size).cuda(local_rank)
+    ema_vae.load_state_dict(vae.state_dict())
+    ema_vae.requires_grad_(True)
+
+    if mpi_size > 1:
+        vae = DistributedDataParallel(vae, device_ids=[local_rank], output_device=local_rank)
+    # validate parameter names
+    named = list(vae.named_parameters())
+    all_params = list(vae.parameters())
+    if len(named) != len(all_params):
+        raise ValueError("Some parameters are unnamed-DDP requires all params to be named")
+    total_params = 0
+    for name, p in vae.named_parameters():
+        total_params += np.prod(p.shape)
+    logprint(total_params=total_params, readable=f'{total_params:,}')
+    return vae, ema_vae
+
+
+def load_opt(H, vae, logprint):
+    optimizer = AdamW(vae.parameters(), weight_decay=H.wd, lr=H.lr, betas=(H.adam_beta1, H.adam_beta2))
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=linear_warmup(H.warmup_iters))
+
+    starting_epoch = 0
+    iterate = 0
+    cur_eval_loss = float('inf')
+    logprint('optimizer & scheduler initialized', epoch=starting_epoch, iterate=iterate, eval_loss=cur_eval_loss)
+    return optimizer, scheduler, starting_epoch, iterate, cur_eval_loss
+
+
+def allreduce(x, average):
+    if mpi_size() > 1:
+        dist.all_reduce(x, dist.ReduceOp.SUM)
+    return x / mpi_size() if average else x
+
+
+def get_cpu_stats_over_ranks(stat_dict):
+    keys = sorted(stat_dict.keys())
+    stats = torch.stack([torch.as_tensor(stat_dict[k]).detach().cuda().float() for k in keys])
+    allreduced = allreduce(stats, average=True).cpu()
+    return {k: allreduced[i].item() for (i, k) in enumerate(keys)}
+
+
+def save_model(path, vae, ema_vae, optimizer, H):
+    torch.save(vae.state_dict(), f'{path}-model.th')
+    torch.save(ema_vae.state_dict(), f'{path}-model-ema.th')
+    torch.save(optimizer.state_dict(), f'{path}-opt.th')
+    from_log = os.path.join(H.save_dir, 'log.jsonl')
+    to_log = f'{os.path.dirname(path)}/{os.path.basename(path)}-log.jsonl'
+    subprocess.check_output(['cp', from_log, to_log])
+
+
+def accumulate_stats(stats, frequency):
+    z = {}
+    for k in stats[-1]:
+        if k in ['distortion_nans', 'rate_nans', 'skipped_updates', 'gcskip']:
+            z[k] = np.sum([a[k] for a in stats[-frequency:]])
+        elif k == 'grad_norm':
+            vals = [a[k] for a in stats[-frequency:]]
+            finites = np.array(vals)[np.isfinite(vals)]
+            if len(finites) == 0:
+                z[k] = 0.0
+            else:
+                z[k] = np.max(finites)
+        elif k == 'elbo':
+            vals = [a[k] for a in stats[-frequency:]]
+            finites = np.array(vals)[np.isfinite(vals)]
+            z['elbo'] = np.mean(vals)
+            z['elbo_filtered'] = np.mean(finites)
+        elif k == 'iter_time':
+            z[k] = stats[-1][k] if len(stats) < frequency else np.mean([a[k] for a in stats[-frequency:]])
+        else:
+            z[k] = np.mean([a[k] for a in stats[-frequency:]])
+    return z
