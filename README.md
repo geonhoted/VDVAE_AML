@@ -64,4 +64,25 @@ The only difference KL-Annealing added Model is you can set **KL-Annealing Sched
 
 ### Setup
 
+Download the vdvae_self_attention.ipynb and upload it under the 'content' directory.
 
+Other dependencies and setup steps (environment, directory structure, interpreter setting) are the same as the Baseline.
+
+### Training Attention added Model
+This version adds self-attention to the encoder blocks to enhance the model's representational capacity, especially in capturing global dependencies.
+
+1. The architecture changes are already reflected in the source files, including block.py and encoder.py. Make sure use_attn=True and use_gated_residual=True are properly set when instantiating the encoder blocks.
+
+2. You can train the model:
+
+- **From scratch**: Start fresh using your own configuration for hyperparameters and training steps.
+
+- **From checkpoint**: Same as the Baseline, you can resume training from saved weights by modifying the checkpoint paths in hps.py.
+
+3. Check the output:
+
+Reconstructed images and sampled images will be shown in the notebook after each epoch.
+
+Inspect the training log (log.txt) to monitor stability and performance.
+
+4. You may compare attention-added results with the baseline to analyze improvements in sample quality or log-likelihood. 
