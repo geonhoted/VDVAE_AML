@@ -16,7 +16,6 @@ class Encoder(nn.Module):
             width = self.widths[res]
             mid_width = int(width * bottleneck_multiple)
 
-            # 원본 방식: 모든 Block은 in_ch == out_ch == width
             block = Block(
                 in_ch=width,
                 mid_ch=mid_width,
@@ -34,10 +33,9 @@ class Encoder(nn.Module):
         x = self.in_conv(x)
 
         feats = {}
-        feats[x.shape[2]] = x  # 초기 해상도
+        feats[x.shape[2]] = x 
 
         for block, res in zip(self.enc_blocks, self.block_resolutions):
-            # 🔥 원본 방식: Block 입력 전에 채널 맞춰줌
             if x.shape[1] != self.widths[res]:
                 x = pad_channels(x, self.widths[res])
 
