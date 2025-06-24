@@ -34,7 +34,6 @@ class Decoder(nn.Module):
         self.gain = nn.Parameter(torch.ones(1, out_width, 1, 1))
         self.bias = nn.Parameter(torch.zeros(1, out_width, 1, 1))
 
-        # 🔥 DmolNet 붙이기
         self.out_net = DmolNet(width=out_width, num_mixtures=num_mixtures, low_bit=low_bit)
 
     def final_fn(self, x):
@@ -53,7 +52,7 @@ class Decoder(nn.Module):
             stats.append(block_stat)
 
         out = self.final_fn(xs[self.output_res])
-        return out, stats  # 🔥 DmolNet 통과시켜 반환
+        return out, stats 
 
     def forward_uncond(self, n, t=None):
         xs = {
@@ -66,7 +65,7 @@ class Decoder(nn.Module):
             xs = block.forward_uncond(xs, t=temp)
 
         out = self.final_fn(xs[self.output_res])
-        return self.out_net.sample(out)  # 🔥 DmolNet 통해 샘플링
+        return self.out_net.sample(out) 
 
     def forward_manual_latents(self, n, latents, t=None):
         xs = {
