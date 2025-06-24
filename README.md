@@ -11,9 +11,9 @@ We reproduce and extend Very Deep Variational Autoencoder.
 
 ### Setup
 
-1) Generate elice environment and create file named 'content'.  
+1) Generate elice environment and create folder named 'content'.  
 2) Download the `vdvae_baseline.ipynb` and upload it under 'content' directory.
-3) Download the `enviornment.yml` and upload this file.
+3) Download the `enviornment.yml` and upload this file (not in the content folder).
 ```
 ## Run this command on bash
 
