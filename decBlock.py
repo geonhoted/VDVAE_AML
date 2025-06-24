@@ -6,12 +6,12 @@ from block import Block
 from utils import draw_gaussian_diag_samples, gaussian_analytical_kl
 
 class DecBlock(nn.Module):
-    def __init__(self, res, width, zdim, bottleneck_multiple, mixin_res=None, n_blocks=1):
+    def __init__(self, res, mixin, width, zdim, bottleneck_multiple, n_blocks=1):
         super().__init__()
         self.res = res
+        self.mixin = mixin
         self.width = width
         self.zdim = zdim
-        self.mixin = mixin_res
 
         cond_width = int(width * bottleneck_multiple)
 
@@ -30,7 +30,7 @@ class DecBlock(nn.Module):
     def get_inputs(self, xs, activations):
         acts = activations[self.res]
         x = xs.get(self.res, torch.zeros_like(acts))
-        
+
         # 🔥 interpolate acts if shape mismatch
         if acts.shape[2:] != x.shape[2:]:
             acts = F.interpolate(acts, size=x.shape[2:], mode='nearest')
